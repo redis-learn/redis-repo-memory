@@ -25,7 +25,7 @@ inputs:
       The default ${{ github.token }} works as long as the workflow grants
       pull-requests: write and statuses: write permissions.
     required: false
-    default: ${{ github.token }}
+    default: ''
 
   upstream-repo:
     description: >
