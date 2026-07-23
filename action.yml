@@ -22,7 +22,7 @@ inputs:
   github-token:
     description: >
       GitHub token for posting PR comments and commit statuses.
-      The default ${{ github.token }} works as long as the workflow grants
+      The default github.token works as long as the workflow grants
       pull-requests: write and statuses: write permissions.
     required: false
     default: ''
