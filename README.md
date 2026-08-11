@@ -15,16 +15,16 @@ On every pull request, the action posts a comment like this:
 
 ---
 
-**🧠 Redis Repo Memory**
+**🧠 Redis Memory**
 
 Found **3** related items from repository history:
 
-- **PR** — [Add vector search support to document-database guide](https://github.com/redis/docs/pull/3201)
+- **PR** — [Add vector search support to document-database guide](https://github.com/redis/docs/pull/3201) 
   > Updates the document database quick start to include vector field indexing and KNN search examples.
 - **PR** — [Update FT.SEARCH examples for Redis 8.x syntax](https://github.com/redis/docs/pull/3156)
   > Revises all FT.SEARCH code blocks to use DIALECT 2, adds filter expression examples.
 - **Issue** — [FT.AGGREGATE examples missing from get-started](https://github.com/redis/docs/issues/2890)
-  > The current quick start covers FT.CREATE and FT.SEARCH but has no aggregation examples.
+  > The current quick start covers FT.CREATE and FT.SEARCH but has no aggregation examples. 🆕
 
 *Memory updated at [2400bb9](https://github.com/redis/docs/commit/2400bb9)*
 
@@ -86,7 +86,7 @@ jobs:
         with:
           fetch-depth: 2
 
-      - uses: redis/redis-repo-memory@v1
+      - uses: redis-learn/redis-repo-memory@v1
         continue-on-error: true
         with:
           redis-url: ${{ secrets.MEMORY_REDIS_URL }}
@@ -139,7 +139,7 @@ jobs:
 
       - name: Install redis-repo-memory scripts
         run: |
-          git clone --depth 1 https://github.com/redis/redis-repo-memory.git /tmp/redis-repo-memory
+          git clone --depth 1 https://github.com/redis-learn/redis-repo-memory.git /tmp/redis-repo-memory
           npm install --prefix /tmp/redis-repo-memory/scripts
 
       - name: Seed history
@@ -157,7 +157,7 @@ Then trigger it from **Actions → Seed Memory (run once) → Run workflow**. Yo
 ### Option B — Seed locally
 
 ```bash
-git clone https://github.com/redis/redis-repo-memory
+git clone https://github.com/redis-learn/redis-repo-memory
 cd redis-repo-memory/scripts
 npm install
 
@@ -209,7 +209,7 @@ GitHub does not pass secrets to `pull_request` workflows triggered by forks of p
 If you want the action to run silently on fork PRs instead of showing a failed step, add a check for the secrets being present:
 
 ```yaml
-      - uses: redis/redis-repo-memory@v1
+      - uses: redis-learn/redis-repo-memory@v1
         continue-on-error: true
         if: ${{ secrets.MEMORY_REDIS_URL != '' }}
         with:
@@ -222,7 +222,7 @@ If you want the action to run silently on fork PRs instead of showing a failed s
 If you're working in a fork and want to surface context from the upstream repository, set the `upstream-repo` input:
 
 ```yaml
-- uses: redis/redis-repo-memory@v1
+- uses: redis-learn/redis-repo-memory@v1
   with:
     redis-url: ${{ secrets.MEMORY_REDIS_URL }}
     openai-api-key: ${{ secrets.OPENAI_API_KEY }}
