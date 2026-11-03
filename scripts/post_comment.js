@@ -151,7 +151,35 @@ async function postOrUpdatePrComment(repo, prNumber, related, context, sourceUrl
   }
 }
 
+// Query mode: print the results where `gh run view --log` can read them, and a readable list in
+// the step summary. Nothing is posted to a PR or commit.
+function reportQueryResults(context, related) {
+  console.log('REPO_MEMORY_QUERY_RESULT_JSON ' + JSON.stringify({
+    query: context.body,
+    files: context.changedFiles,
+    results: related,
+  }));
+  const lines = ['## 🧠 Redis Memory query', ''];
+  if (related.length === 0) {
+    lines.push('No related prior context found.');
+  } else {
+    for (const item of related) {
+      const link = item.sourceUrl ? `[${item.title}](${item.sourceUrl})` : item.title;
+      lines.push(`- ${link} (distance ${item.score.toFixed(2)}${item.state ? `, ${item.state}` : ''})`);
+    }
+  }
+  const out = lines.join('\n') + '\n';
+  if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, out);
+  else process.stdout.write(out);
+}
+
 async function main() {
+  const earlyResults = JSON.parse(fs.readFileSync('/tmp/memory_results.json', 'utf8'));
+  if (earlyResults.context && earlyResults.context.queryMode) {
+    reportQueryResults(earlyResults.context, earlyResults.related);
+    return;
+  }
+
   const token = process.env.GITHUB_TOKEN;
   const repo = process.env.GITHUB_REPOSITORY;
 

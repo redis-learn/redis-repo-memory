@@ -20,7 +20,7 @@
 
 const fs = require('fs');
 const { createClient, SchemaFieldTypes, VectorAlgorithms } = require('redis');
-const OpenAI = require('openai');
+const { embed, isMock } = require('./embed');
 
 const INDEX_NAME = 'repo_memory_idx';
 const KEY_PREFIX = 'memory:';
@@ -55,6 +55,48 @@ async function ensureIndex(client) {
   console.log(`created index: ${INDEX_NAME}`);
 }
 
+const FULL_TEXT_MAX = 8000;
+
+async function githubGet(path, token) {
+  const res = await fetch(`https://api.github.com${path}`, {
+    headers: {
+      Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${token}`,
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+  return res.ok ? res.json() : null;
+}
+
+// Query mode only. Stored summaries are cut to 500 characters, so look the full text up at the
+// source: the squash/merge commit message for a merged PR, the commit message for a push, the
+// body otherwise. Returns {} when the lookup fails; the summary is still reported.
+async function fullTextFor(item, token) {
+  const m = (item.sourceUrl || '').match(/github\.com\/([^/]+\/[^/]+)\/(pull|commit|issues)\/([^/?#]+)/);
+  if (!m || !token) return {};
+  const [, repo, kind, id] = m;
+  try {
+    if (kind === 'commit') {
+      const c = await githubGet(`/repos/${repo}/commits/${id}`, token);
+      return c ? { fullText: c.commit.message.slice(0, FULL_TEXT_MAX), state: 'commit' } : {};
+    }
+    if (kind === 'pull') {
+      const p = await githubGet(`/repos/${repo}/pulls/${id}`, token);
+      if (!p) return {};
+      if (p.merged && p.merge_commit_sha) {
+        const c = await githubGet(`/repos/${repo}/commits/${p.merge_commit_sha}`, token);
+        const msg = c && !/^Merge pull request/.test(c.commit.message) ? c.commit.message : (p.body || '');
+        return { fullText: msg.slice(0, FULL_TEXT_MAX), state: 'merged', mergedAt: p.merged_at };
+      }
+      return { fullText: (p.body || '').slice(0, FULL_TEXT_MAX), state: p.state, mergedAt: null };
+    }
+    const i = await githubGet(`/repos/${repo}/issues/${id}`, token);
+    return i ? { fullText: (i.body || '').slice(0, FULL_TEXT_MAX), state: i.state } : {};
+  } catch {
+    return {};
+  }
+}
+
 async function main() {
   const redisUrl = process.env.REDIS_URL;
   const openaiKey = process.env.OPENAI_API_KEY;
@@ -63,33 +105,41 @@ async function main() {
     console.error('REDIS_URL secret is not set');
     process.exit(1);
   }
-  if (!openaiKey) {
+  if (!openaiKey && !isMock()) {
     console.error('OPENAI_API_KEY secret is not set');
     process.exit(1);
   }
 
   const context = JSON.parse(fs.readFileSync('/tmp/memory_context.json', 'utf8'));
+  const queryMode = context.queryMode === true;
 
   const client = createClient({ url: redisUrl });
   client.on('error', err => console.error('Redis error:', err.message));
   await client.connect();
 
   try {
-    const openai = new OpenAI({ apiKey: openaiKey });
+    if (queryMode) {
+      // Read-only: never create the index or write anything.
+      const exists = await client.ft.info(INDEX_NAME).then(() => true).catch(() => false);
+      if (!exists) {
+        fs.writeFileSync('/tmp/memory_results.json', JSON.stringify({ context, sourceUrl: '', related: [] }, null, 2));
+        console.log('query_mode index=missing related_count=0');
+        return;
+      }
+    } else {
+      await ensureIndex(client);
+    }
 
-    await ensureIndex(client);
+    const embedding = await embed(context.searchText || context.title, openaiKey);
+    const embeddingBuffer = Buffer.from(new Float32Array(embedding).buffer);
 
-    const embeddingRes = await openai.embeddings.create({
-      model: 'text-embedding-3-small',
-      input: context.searchText || context.title,
-    });
-    const embeddingBuffer = Buffer.from(
-      new Float32Array(embeddingRes.data[0].embedding).buffer
-    );
+    const queryLimit = Math.max(1, parseInt(process.env.QUERY_LIMIT || '', 10) || MAX_RESULTS);
+    const queryMaxDistance = parseFloat(process.env.QUERY_MAX_DISTANCE || '') || SIMILARITY_THRESHOLD;
+    const topK = queryMode ? Math.max(TOP_K, queryLimit * 2) : TOP_K;
 
     const searchResult = await client.ft.search(
       INDEX_NAME,
-      `*=>[KNN ${TOP_K} @embedding $BLOB AS score]`,
+      `*=>[KNN ${topK} @embedding $BLOB AS score]`,
       {
         PARAMS: { BLOB: embeddingBuffer },
         RETURN: ['type', 'title', 'body_summary', 'source_url', 'created_at', 'score', 'repo'],
@@ -100,6 +150,8 @@ async function main() {
 
     // Build current item ID so we can exclude it from results
     const safeRepo = context.repo.replace(/\//g, '_');
+    const threshold = queryMode ? queryMaxDistance : SIMILARITY_THRESHOLD;
+    const maxResults = queryMode ? queryLimit : MAX_RESULTS;
     const itemId = context.prNumber
       ? `${safeRepo}_pr_${context.prNumber}`
       : `${safeRepo}_push_${context.sha?.slice(0, 8)}`;
@@ -116,9 +168,28 @@ async function main() {
     const related = searchResult.documents
       .filter(doc => {
         const score = parseFloat(doc.value.score ?? '2');
-        return score < SIMILARITY_THRESHOLD && allowedRepos.has(doc.value.repo) && !excludeKeys.has(doc.id);
+        return score < threshold && allowedRepos.has(doc.value.repo) && !excludeKeys.has(doc.id);
       })
-      .slice(0, MAX_RESULTS);
+      .slice(0, maxResults);
+
+    if (queryMode) {
+      const token = process.env.GITHUB_TOKEN;
+      const items = [];
+      for (const doc of related) {
+        const item = {
+          type: doc.value.type,
+          title: doc.value.title,
+          bodySummary: doc.value.body_summary,
+          sourceUrl: doc.value.source_url,
+          createdAt: doc.value.created_at,
+          score: parseFloat(doc.value.score ?? '2'),
+        };
+        items.push({ ...item, ...(await fullTextFor(item, token)) });
+      }
+      fs.writeFileSync('/tmp/memory_results.json', JSON.stringify({ context, sourceUrl: '', related: items }, null, 2));
+      console.log(`query_mode related_count=${items.length}`);
+      return;
+    }
 
     // Store the current context as a memory artifact
 

@@ -198,6 +198,83 @@ post_comment.js      — posts PR comment (PRs) or commit status + step summary 
 
 Memories are stored as Redis hashes with a `FLOAT32` HNSW vector index. The index is created automatically on first run. Each memory stores the title, a body summary, source URL, repo, and embedding.
 
+## Querying before you open a PR
+
+The action normally runs on pushes and PR events, so related history only appears after you have pushed
+work. Query mode lets you search memory from a plan, before any code exists. It is read-only: it embeds
+your text, searches, and prints the results. It never stores anything and never posts to a PR or commit.
+
+Add a `workflow_dispatch` workflow that passes the new inputs:
+
+```yaml
+name: Repo Memory Query
+
+on:
+  workflow_dispatch:
+    inputs:
+      query:
+        description: Describe the work you are about to do
+        required: true
+        type: string
+      files:
+        description: Files you plan to change (space-separated, optional)
+        required: false
+        type: string
+
+permissions:
+  contents: read        # read commit messages for the full text of results
+  pull-requests: read   # read merged PRs
+
+jobs:
+  query:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: redis-learn/redis-repo-memory@v1
+        with:
+          redis-url: ${{ secrets.MEMORY_REDIS_URL }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          query: ${{ inputs.query }}
+          query-files: ${{ inputs.files }}
+```
+
+Run it and read the results from the job log:
+
+```bash
+gh workflow run repo-memory-query.yml -f query="Move the job-queue demo to RedisClient" -f files="content/develop/use-cases/job-queue/java-jedis/_index.md"
+gh run watch
+gh run view --log | grep REPO_MEMORY_QUERY_RESULT_JSON
+```
+
+The log line is a single JSON object: `{"query": ..., "files": [...], "results": [...]}`. Each result has the
+usual `title`, `bodySummary`, `sourceUrl`, `score`, plus `fullText` (the squash-merge or commit message,
+fetched from GitHub because stored summaries are cut to 500 characters), `state` and `mergedAt`.
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `query` | `''` | Text to search with. Query mode runs only on `workflow_dispatch` and only when this is non-empty. |
+| `query-files` | `''` | Paths you plan to change, added to the embedded text the way a push's changed files are. |
+| `query-limit` | `5` | Maximum results. |
+| `query-max-distance` | `0.60` | Maximum cosine distance (lower is more similar). |
+
+Things to know:
+
+- The query text and results appear in the job log. On a public repository the log is public, so do not put
+  anything confidential in the query.
+- Results come from the same repository (and `upstream-repo`, if set) as before.
+- A repository whose index does not exist yet returns no results; query mode does not create it.
+- Existing workflows are unaffected: nothing changes unless a workflow passes `query`.
+
+## Testing
+
+`scripts/test_query_mode.js` exercises the store path and query mode offline, using a deterministic mock
+embedding (`REPO_MEMORY_EMBED_PROVIDER=mock`, for tests only). It needs an **empty** Redis with Search
+(Redis 8 has it built in) and refuses to run otherwise:
+
+```bash
+cd scripts && npm ci
+REPO_MEMORY_TEST_REDIS_URL=redis://localhost:6379 node test_query_mode.js
+```
+
 ## Known limitations
 
 **Fork PRs on public repositories**

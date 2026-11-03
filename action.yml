@@ -35,6 +35,33 @@ inputs:
     required: false
     default: ''
 
+  query:
+    description: >
+      Query mode (workflow_dispatch only). Text describing planned work, for example a task
+      statement. When set, the action searches memory for related items WITHOUT storing anything
+      or posting to a PR, and prints the results (with full commit or squash-merge text) to the
+      job log as a single REPO_MEMORY_QUERY_RESULT_JSON line. Ignored on other events.
+      The text appears in the job log, which is public on public repositories.
+    required: false
+    default: ''
+
+  query-files:
+    description: >
+      Query mode: space- or comma-separated paths of files you plan to change. They are added to
+      the text that is embedded, like the changed files of a push.
+    required: false
+    default: ''
+
+  query-limit:
+    description: 'Query mode: maximum number of related items to return.'
+    required: false
+    default: '5'
+
+  query-max-distance:
+    description: 'Query mode: maximum cosine distance for a result (lower is more similar).'
+    required: false
+    default: '0.60'
+
 runs:
   using: 'composite'
   steps:
@@ -50,6 +77,9 @@ runs:
 
     - name: Collect context
       shell: bash
+      env:
+        QUERY_TEXT: ${{ inputs.query }}
+        QUERY_FILES: ${{ inputs.query-files }}
       run: node ${{ github.action_path }}/scripts/collect_context.js
 
     - name: Retrieve and store memory
@@ -58,6 +88,9 @@ runs:
         REDIS_URL: ${{ inputs.redis-url }}
         OPENAI_API_KEY: ${{ inputs.openai-api-key }}
         UPSTREAM_REPO: ${{ inputs.upstream-repo }}
+        QUERY_LIMIT: ${{ inputs.query-limit }}
+        QUERY_MAX_DISTANCE: ${{ inputs.query-max-distance }}
+        GITHUB_TOKEN: ${{ inputs.github-token || github.token }}
       run: node ${{ github.action_path }}/scripts/retrieve_memory.js
 
     - name: Post results

@@ -41,9 +41,29 @@ function getChangedFiles(commitSha) {
   }
 }
 
+// Query mode: a workflow_dispatch run with a non-empty `query` input searches memory without
+// storing anything. Any other event ignores QUERY_TEXT, so existing workflows are unaffected.
+const queryText = (process.env.QUERY_TEXT || '').trim();
+
 let context;
 
-if (eventName === 'push') {
+if (eventName === 'workflow_dispatch' && queryText) {
+  context = {
+    eventName,
+    type: 'query',
+    queryMode: true,
+    sha,
+    branch: ref.replace('refs/heads/', ''),
+    repo,
+    prNumber: null,
+    title: queryText.split('\n')[0].slice(0, 200),
+    body: queryText,
+    labels: [],
+    changedFiles: (process.env.QUERY_FILES || '').split(/[\s,]+/).filter(Boolean),
+    author: event.sender?.login || 'unknown',
+    timestamp: new Date().toISOString(),
+  };
+} else if (eventName === 'push') {
   const headCommit = event.head_commit || {};
   const branch = ref.replace('refs/heads/', '');
   const title = (headCommit.message || '').split('\n')[0];
